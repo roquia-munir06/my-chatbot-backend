@@ -29,7 +29,7 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Middleware
 app.use(cors({
-  origin: "http://localhost:3000",
+  origin: ["http://localhost:3000", "https://chatbot-e91e.vercel.app/"],
   credentials: true
 }));
 app.use(bodyParser.json());
