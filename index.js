@@ -27,40 +27,22 @@ const pool = new Pool({
 // Google OAuth client
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// ---------------- CORS Setup ---------------- //
-// List of allowed origins
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://chatbot-e91e.vercel.app"
-];
-
-// CORS middleware with dynamic origin check
+// Middleware
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true); // Origin is allowed
-    } else {
-      callback(new Error("Not allowed by CORS")); // Origin is not allowed
-    }
-  },
+  origin: "http://localhost:3000",
   credentials: true
 }));
-
 app.use(bodyParser.json());
 app.use(cookieParser());
 
 // JWT helper functions
 const createAccessToken = (user) =>
-  jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "15m" });
+  jwt.sign({ id: user.id, email: user.email, name: user.name  }, process.env.JWT_SECRET, { expiresIn: "15m" });
 
 const createRefreshToken = (user) =>
   jwt.sign({ id: user.id }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: "7d" });
 
-// ---------------- Auth Middleware ---------------- //
-function verifyAccessToken(req, res, next) {
+const verifyAccessToken = (req, res, next) => {
   const token = req.cookies.accessToken;
   if (!token) return res.status(401).json({ message: "Unauthorized" });
 
@@ -70,11 +52,7 @@ function verifyAccessToken(req, res, next) {
   } catch {
     res.status(401).json({ message: "Invalid or expired token" });
   }
-}
-
-app.get("/verify", verifyAccessToken, (req, res) => {
-  res.status(200).json({ user: req.user });
-});
+};
 
 // ---------------- Email/Password Auth ---------------- //
 
@@ -137,6 +115,7 @@ app.post("/api/auth/google", async (req, res) => {
   const { token } = req.body;
 
   try {
+    // 1️⃣ Verify Google token
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
@@ -145,14 +124,18 @@ app.post("/api/auth/google", async (req, res) => {
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
 
+    // 2️⃣ Check if user exists in DB
     let userResult = await pool.query("SELECT * FROM users WHERE google_id=$1", [googleId]);
     let user;
     if (userResult.rows.length === 0) {
+      // Check if email exists from normal signup
       let emailResult = await pool.query("SELECT * FROM users WHERE email=$1", [email]);
       if (emailResult.rows.length > 0) {
+        // Link Google ID to existing account
         user = emailResult.rows[0];
         await pool.query("UPDATE users SET google_id=$1 WHERE id=$2", [googleId, user.id]);
       } else {
+        // 3️⃣ Create new user
         const insertResult = await pool.query(
           "INSERT INTO users (name, email, google_id) VALUES ($1, $2, $3) RETURNING *",
           [name, email, googleId]
@@ -163,6 +146,7 @@ app.post("/api/auth/google", async (req, res) => {
       user = userResult.rows[0];
     }
 
+    // 4️⃣ Generate session/JWT
     const accessToken = createAccessToken(user);
     const refreshToken = createRefreshToken(user);
 
@@ -207,7 +191,22 @@ app.get("/dashboard", verifyAccessToken, (req, res) => {
 
 app.get("/", (req, res) => res.send("Backend is working!"));
 
+app.get("/verify", verifyAccessToken, async (req, res) => {
+  try {
+    // Optional: fetch full user info from DB
+    const userResult = await pool.query("SELECT id, name, email FROM users WHERE id=$1", [req.user.id]);
+    const user = userResult.rows[0];
+    res.json({ user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Start server
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+
 
 
 
